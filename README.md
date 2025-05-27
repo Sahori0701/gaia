@@ -143,7 +143,7 @@ npm start
 ## 📊 Cumplimiento Normativo
 
 - ✅ Resolución 3374 de 2000 (Historia clínica)
-- ✅ Ley 1581 de 2012 (Habeas Data)
+- ��� Ley 1581 de 2012 (Habeas Data)
 - ✅ Resolución 2003 de 2014 (RIPS)
 - ✅ Circular 030 de 2013 (Seguridad información)
 
