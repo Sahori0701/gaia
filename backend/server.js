@@ -6,15 +6,24 @@ const rateLimit = require("express-rate-limit")
 const compression = require("compression")
 require("dotenv").config()
 
+const { findAvailablePort } = require("./utils/port-finder")
+
 // Importar configuraciones
 const { logger } = require("./config/logger")
-const { auditMiddleware } = require("../backend/middleware/audit.middlewrae")
+const { auditMiddleware } = require("./middleware/auth.middleware")
+const { prisma, testConnection, getDatabaseStats } = require("./config/database")
+
+// Importar rutas
+const authRoutes = require("./routes/auth.routes")
+const patientRoutes = require("./routes/patient.routes")
+const appointmentRoutes = require("./routes/appointment.routes")
+const medicalRecordRoutes = require("./routes/medical-record.routes")
 
 // Crear aplicación Express
 const app = express()
 
 // Configuración del puerto
-const PORT = process.env.PORT || 5000
+const PORT = process.env.PORT || 3001
 const NODE_ENV = process.env.NODE_ENV || "development"
 
 // ===== MIDDLEWARES DE SEGURIDAD =====
@@ -64,6 +73,20 @@ const limiter = rateLimit({
 })
 app.use("/api/", limiter)
 
+// Rate limiting más estricto para autenticación
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: NODE_ENV === "production" ? 10 : 50, // límite más bajo para auth
+  message: {
+    error: "Demasiados intentos de autenticación, intente nuevamente en 15 minutos.",
+    code: "AUTH_RATE_LIMIT_EXCEEDED",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+app.use("/api/auth/login", authLimiter)
+app.use("/api/auth/register", authLimiter)
+
 // Compresión para mejorar performance
 app.use(compression())
 
@@ -82,6 +105,20 @@ app.use(
 
 // Middleware de auditoría para cumplir normativas colombianas
 app.use(auditMiddleware)
+
+// ===== RUTAS DE LA API =====
+
+// Rutas de autenticación
+app.use("/api/auth", authRoutes)
+
+// Rutas de pacientes
+app.use("/api/patients", patientRoutes)
+
+// Rutas de citas médicas
+app.use("/api/appointments", appointmentRoutes)
+
+// Rutas de historia clínica
+app.use("/api/medical-records", medicalRecordRoutes)
 
 // ===== RUTAS DE PRUEBA =====
 
@@ -118,6 +155,7 @@ app.get("/api/info", (req, res) => {
       "Cumplimiento normativo colombiano",
       "Generación de reportes RIPS",
       "Auditoría y trazabilidad",
+      "Autenticación JWT con roles",
     ],
     compliance: [
       "Resolución 3374 de 2000 (Historia clínica)",
@@ -131,6 +169,40 @@ app.get("/api/info", (req, res) => {
       patients: "/api/patients",
       appointments: "/api/appointments",
       medical_records: "/api/medical-records",
+      database_stats: "/api/test/database-stats",
+    },
+    authEndpoints: {
+      register: "POST /api/auth/register",
+      login: "POST /api/auth/login",
+      refresh: "POST /api/auth/refresh",
+      logout: "POST /api/auth/logout",
+      profile: "GET /api/auth/profile",
+      changePassword: "PUT /api/auth/change-password",
+      testProtected: "GET /api/auth/test/protected",
+    },
+    patientEndpoints: {
+      list: "GET /api/patients",
+      create: "POST /api/patients",
+      getById: "GET /api/patients/:id",
+      update: "PUT /api/patients/:id",
+      stats: "GET /api/patients/stats",
+    },
+    appointmentEndpoints: {
+      list: "GET /api/appointments",
+      create: "POST /api/appointments",
+      getById: "GET /api/appointments/:id",
+      update: "PUT /api/appointments/:id",
+      cancel: "PATCH /api/appointments/:id/cancel",
+      stats: "GET /api/appointments/stats",
+      availableSlots: "GET /api/appointments/available-slots",
+    },
+    medicalRecordEndpoints: {
+      list: "GET /api/medical-records",
+      create: "POST /api/medical-records",
+      getById: "GET /api/medical-records/:id",
+      update: "PUT /api/medical-records/:id",
+      patientHistory: "GET /api/medical-records/patient/:patientId/history",
+      stats: "GET /api/medical-records/stats",
     },
   }
 
@@ -140,27 +212,150 @@ app.get("/api/info", (req, res) => {
 // Ruta de prueba de autenticación
 app.get("/api/test/auth", (req, res) => {
   res.status(200).json({
-    message: "Endpoint de autenticación funcionando",
+    message: "✅ Sistema de autenticación JWT configurado",
+    endpoints: {
+      register: "POST /api/auth/register",
+      login: "POST /api/auth/login",
+      refresh: "POST /api/auth/refresh",
+      logout: "POST /api/auth/logout (requiere token)",
+      profile: "GET /api/auth/profile (requiere token)",
+      changePassword: "PUT /api/auth/change-password (requiere token)",
+      testProtected: "GET /api/auth/test/protected (requiere token)",
+    },
+    testCredentials: {
+      admin: {
+        email: "admin@gaia-eps.com",
+        password: "Admin123!",
+      },
+      doctor: {
+        email: "dr.garcia@gaia-eps.com",
+        password: "Doctor123!",
+      },
+      patient: {
+        email: "juan.perez@email.com",
+        password: "Patient123!",
+      },
+    },
     timestamp: new Date().toISOString(),
     ready: true,
   })
 })
 
-// Ruta de prueba de base de datos
+// Ruta de prueba de base de datos mejorada
 app.get("/api/test/database", async (req, res) => {
   try {
-    // Aquí irá la conexión a la base de datos cuando configuremos Prisma
-    res.status(200).json({
-      message: "Conexión a base de datos lista para configurar",
-      database: "PostgreSQL (Neon)",
-      status: "pending_configuration",
-      timestamp: new Date().toISOString(),
-    })
+    const isConnected = await testConnection()
+
+    if (isConnected) {
+      const stats = await getDatabaseStats()
+
+      res.status(200).json({
+        message: "✅ Conexión a base de datos exitosa",
+        database: "PostgreSQL (Neon)",
+        status: "connected",
+        stats: stats,
+        timestamp: new Date().toISOString(),
+      })
+    } else {
+      res.status(500).json({
+        error: "❌ Error en conexión a base de datos",
+        database: "PostgreSQL (Neon)",
+        status: "disconnected",
+        timestamp: new Date().toISOString(),
+      })
+    }
   } catch (error) {
     logger.error("Error en prueba de base de datos", { error: error.message })
     res.status(500).json({
       error: "Error en conexión a base de datos",
       message: error.message,
+      timestamp: new Date().toISOString(),
+    })
+  }
+})
+
+// Nueva ruta para estadísticas detalladas de la base de datos
+app.get("/api/test/database-stats", async (req, res) => {
+  try {
+    const stats = await getDatabaseStats()
+
+    // Obtener algunos datos de ejemplo
+    const sampleData = {
+      latestUsers: await prisma.user.findMany({
+        take: 3,
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          firstName: true,
+          lastName: true,
+          createdAt: true,
+        },
+      }),
+      specialties: await prisma.specialty.findMany({
+        select: {
+          name: true,
+          code: true,
+          _count: {
+            select: {
+              medicalProfessionals: true,
+              appointments: true,
+            },
+          },
+        },
+      }),
+      upcomingAppointments: await prisma.appointment.findMany({
+        where: {
+          scheduledDate: {
+            gte: new Date(),
+          },
+          status: "SCHEDULED",
+        },
+        take: 5,
+        orderBy: { scheduledDate: "asc" },
+        include: {
+          patient: {
+            include: {
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                },
+              },
+            },
+          },
+          medicalProfessional: {
+            include: {
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                },
+              },
+              specialty: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    }
+
+    res.status(200).json({
+      message: "📊 Estadísticas de base de datos Gaia",
+      stats: stats,
+      sampleData: sampleData,
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    logger.error("Error obteniendo estadísticas de BD", { error: error.message })
+    res.status(500).json({
+      error: "Error obteniendo estadísticas",
+      message: error.message,
+      timestamp: new Date().toISOString(),
     })
   }
 })
@@ -224,55 +419,120 @@ app.use((error, req, res, next) => {
 
 // ===== INICIO DEL SERVIDOR =====
 
-const server = app.listen(PORT, () => {
-  logger.info(`🏥 Servidor Gaia iniciado`, {
-    port: PORT,
-    environment: NODE_ENV,
-    timezone: process.env.TIMEZONE || "America/Bogota",
-    timestamp: new Date().toISOString(),
-  })
+// Función para iniciar el servidor con puerto dinámico
+async function startServer() {
+  try {
+    // Probar conexión a la base de datos al iniciar
+    const isConnected = await testConnection()
+    if (!isConnected) {
+      logger.error("❌ No se pudo conectar a la base de datos al iniciar")
+      process.exit(1)
+    }
 
-  console.log(`
+    const availablePort = await findAvailablePort(PORT)
+
+    const server = app.listen(availablePort, () => {
+      logger.info(`🏥 Servidor Gaia iniciado`, {
+        port: availablePort,
+        requestedPort: PORT,
+        environment: NODE_ENV,
+        timezone: process.env.TIMEZONE || "America/Bogota",
+        timestamp: new Date().toISOString(),
+      })
+
+      console.log(`
   🏥 ===== GAIA - SISTEMA DE GESTIÓN DE SALUD EPS =====
   
-  ✅ Servidor corriendo en: http://localhost:${PORT}
+  ✅ Servidor corriendo en: http://localhost:${availablePort}
+  ✅ Base de datos conectada: PostgreSQL (Neon)
+  ✅ Autenticación JWT configurada
+  ✅ Endpoints completos disponibles
+  ${availablePort !== PORT ? `⚠️  Puerto ${PORT} estaba ocupado, usando ${availablePort}` : ""}
   🌍 Entorno: ${NODE_ENV}
   🕐 Zona horaria: America/Bogota
   📋 Cumplimiento normativo: Colombia
   
-  📍 Endpoints de prueba:
-  • Health Check: http://localhost:${PORT}/health
-  • Info Sistema: http://localhost:${PORT}/api/info
-  • Test Auth: http://localhost:${PORT}/api/test/auth
-  • Test Database: http://localhost:${PORT}/api/test/database
-  • Test Audit: http://localhost:${PORT}/api/test/audit (POST)
+  📍 Endpoints principales:
+  • Health Check: http://localhost:${availablePort}/health
+  • Info Sistema: http://localhost:${availablePort}/api/info
+  • Test Auth: http://localhost:${availablePort}/api/test/auth
   
-  🔒 Características de seguridad activadas:
-  • Helmet (Seguridad HTTP)
-  • CORS configurado
-  • Rate Limiting
+  🔐 Endpoints de autenticación:
+  • Register: POST http://localhost:${availablePort}/api/auth/register
+  • Login: POST http://localhost:${availablePort}/api/auth/login
+  • Profile: GET http://localhost:${availablePort}/api/auth/profile
+  • Test Protected: GET http://localhost:${availablePort}/api/auth/test/protected
+  
+  👥 Endpoints de pacientes:
+  • List: GET http://localhost:${availablePort}/api/patients
+  • Create: POST http://localhost:${availablePort}/api/patients
+  • Get by ID: GET http://localhost:${availablePort}/api/patients/:id
+  • Update: PUT http://localhost:${availablePort}/api/patients/:id
+  • Stats: GET http://localhost:${availablePort}/api/patients/stats
+  
+  📅 Endpoints de citas médicas:
+  • List: GET http://localhost:${availablePort}/api/appointments
+  • Create: POST http://localhost:${availablePort}/api/appointments
+  • Get by ID: GET http://localhost:${availablePort}/api/appointments/:id
+  • Update: PUT http://localhost:${availablePort}/api/appointments/:id
+  • Cancel: PATCH http://localhost:${availablePort}/api/appointments/:id/cancel
+  • Stats: GET http://localhost:${availablePort}/api/appointments/stats
+  • Available Slots: GET http://localhost:${availablePort}/api/appointments/available-slots
+  
+  📋 Endpoints de historia clínica:
+  • List: GET http://localhost:${availablePort}/api/medical-records
+  • Create: POST http://localhost:${availablePort}/api/medical-records
+  • Get by ID: GET http://localhost:${availablePort}/api/medical-records/:id
+  • Update: PUT http://localhost:${availablePort}/api/medical-records/:id
+  • Patient History: GET http://localhost:${availablePort}/api/medical-records/patient/:patientId/history
+  • Stats: GET http://localhost:${availablePort}/api/medical-records/stats
+  
+  👥 Credenciales de prueba:
+  • Admin: admin@gaia-eps.com / Admin123!
+  • Doctor: dr.garcia@gaia-eps.com / Doctor123!
+  • Paciente: juan.perez@email.com / Patient123!
+  
+  🔧 Herramientas de desarrollo:
+  • Prisma Studio: npx prisma studio
+  
+  🔒 Características de seguridad:
+  • JWT con refresh tokens
+  • Rate limiting por IP
+  • Validaciones colombianas
   • Logs de auditoría
-  • Compresión
+  • Encriptación de contraseñas
+  • Datos sensibles encriptados
   
   ===================================================
-  `)
-})
+      `)
+    })
 
-// Manejo de cierre graceful
-process.on("SIGTERM", () => {
-  logger.info("SIGTERM recibido, cerrando servidor gracefully")
-  server.close(() => {
-    logger.info("Servidor cerrado correctamente")
-    process.exit(0)
-  })
-})
+    // Manejo de cierre graceful
+    process.on("SIGTERM", () => {
+      logger.info("SIGTERM recibido, cerrando servidor gracefully")
+      server.close(async () => {
+        await prisma.$disconnect()
+        logger.info("Servidor cerrado correctamente")
+        process.exit(0)
+      })
+    })
 
-process.on("SIGINT", () => {
-  logger.info("SIGINT recibido, cerrando servidor gracefully")
-  server.close(() => {
-    logger.info("Servidor cerrado correctamente")
-    process.exit(0)
-  })
-})
+    process.on("SIGINT", () => {
+      logger.info("SIGINT recibido, cerrando servidor gracefully")
+      server.close(async () => {
+        await prisma.$disconnect()
+        logger.info("Servidor cerrado correctamente")
+        process.exit(0)
+      })
+    })
 
+    return server
+  } catch (error) {
+    logger.error("Error iniciando servidor", { error: error.message })
+    process.exit(1)
+  }
+}
+
+// Iniciar el servidor
+startServer()
 module.exports = app

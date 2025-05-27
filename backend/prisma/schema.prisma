@@ -1,0 +1,475 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== ENUMS =====
+
+enum UserRole {
+  ADMIN
+  PATIENT
+  DOCTOR
+  SPECIALIST
+  PSYCHOLOGIST
+  NURSE
+  ADMINISTRATIVE
+  AUDITOR
+  LABORATORY
+  PHARMACY
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+enum DocumentType {
+  CC // Cédula de Ciudadanía
+  TI // Tarjeta de Identidad
+  CE // Cédula de Extranjería
+  PA // Pasaporte
+  RC // Registro Civil
+  MS // Menor sin identificación
+  AS // Adulto sin identificación
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  NOT_SPECIFIED
+}
+
+enum BloodType {
+  A_POSITIVE
+  A_NEGATIVE
+  B_POSITIVE
+  B_NEGATIVE
+  AB_POSITIVE
+  AB_NEGATIVE
+  O_POSITIVE
+  O_NEGATIVE
+  UNKNOWN
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+  RESCHEDULED
+}
+
+enum AppointmentType {
+  CONSULTATION
+  FOLLOW_UP
+  EMERGENCY
+  PROCEDURE
+  LABORATORY
+  IMAGING
+  THERAPY
+  VACCINATION
+}
+
+enum RecordType {
+  CONSULTATION
+  DIAGNOSIS
+  TREATMENT
+  PRESCRIPTION
+  LABORATORY_RESULT
+  IMAGING_RESULT
+  PROCEDURE
+  VACCINATION
+  ALLERGY
+  VITAL_SIGNS
+}
+
+enum DocumentCategory {
+  MEDICAL_RECORD
+  LABORATORY_RESULT
+  IMAGING
+  PRESCRIPTION
+  CONSENT_FORM
+  INSURANCE_DOCUMENT
+  IDENTIFICATION
+  MEDICAL_CERTIFICATE
+  REFERRAL
+}
+
+enum AuditAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  EXPORT
+  PRINT
+  SHARE
+}
+
+// ===== MODELOS PRINCIPALES =====
+
+model User {
+  id                String     @id @default(cuid())
+  email             String     @unique
+  password          String
+  role              UserRole
+  status            UserStatus @default(PENDING_VERIFICATION)
+  emailVerified     Boolean    @default(false)
+  emailVerifiedAt   DateTime?
+  lastLogin         DateTime?
+  loginAttempts     Int        @default(0)
+  lockedUntil       DateTime?
+  passwordChangedAt DateTime?
+  
+  // Información personal básica
+  firstName         String
+  lastName          String
+  documentType      DocumentType
+  documentNumber    String     @unique
+  phone             String?
+  emergencyContact  String?
+  
+  // Timestamps
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  
+  // Relaciones
+  patient           Patient?
+  medicalProfessional MedicalProfessional?
+  auditLogs         AuditLog[]
+  createdAppointments Appointment[] @relation("CreatedByUser")
+  
+  // Índices para performance
+  @@index([email])
+  @@index([documentNumber])
+  @@index([documentType, documentNumber])
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+model Patient {
+  id                    String      @id @default(cuid())
+  userId                String      @unique
+  
+  // Información demográfica
+  birthDate             DateTime
+  gender                Gender
+  bloodType             BloodType   @default(UNKNOWN)
+  address               String
+  city                  String
+  department            String      // Departamento de Colombia
+  postalCode            String?
+  
+  // Información de afiliación EPS
+  affiliationNumber     String      @unique
+  affiliationType       String      // Contributivo, Subsidiado, etc.
+  epsCode               String
+  ipsCode               String?
+  
+  // Información médica básica
+  allergies             String?     // JSON string con alergias
+  chronicDiseases       String?     // JSON string con enfermedades crónicas
+  medications           String?     // JSON string con medicamentos actuales
+  emergencyContactName  String
+  emergencyContactPhone String
+  
+  // Información socioeconómica
+  occupation            String?
+  educationLevel        String?
+  maritalStatus         String?
+  
+  // Timestamps
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+  
+  // Relaciones
+  user                  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments          Appointment[]
+  medicalRecords        MedicalRecord[]
+  documents             Document[]
+  
+  // Índices para performance
+  @@index([affiliationNumber])
+  @@index([epsCode])
+  @@index([city, department])
+  @@index([userId])
+  @@map("patients")
+}
+
+model MedicalProfessional {
+  id                    String      @id @default(cuid())
+  userId                String      @unique
+  
+  // Información profesional
+  licenseNumber         String      @unique
+  specialtyId           String?
+  subSpecialties        String?     // JSON array de subespecialidades
+  
+  // Información laboral
+  hospitalAffiliation   String?
+  consultingRoomNumber  String?
+  workSchedule          String?     // JSON con horarios de trabajo
+  consultationDuration  Int         @default(30) // minutos
+  
+  // Configuraciones
+  isActive              Boolean     @default(true)
+  acceptsEmergencies    Boolean     @default(false)
+  maxDailyAppointments  Int         @default(20)
+  
+  // Timestamps
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+  
+  // Relaciones
+  user                  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialty             Specialty?  @relation(fields: [specialtyId], references: [id])
+  appointments          Appointment[]
+  medicalRecords        MedicalRecord[]
+  
+  // Índices para performance
+  @@index([licenseNumber])
+  @@index([specialtyId])
+  @@index([isActive])
+  @@index([userId])
+  @@map("medical_professionals")
+}
+
+model Specialty {
+  id                    String      @id @default(cuid())
+  name                  String      @unique
+  code                  String      @unique // Código según normativa colombiana
+  description           String?
+  isActive              Boolean     @default(true)
+  
+  // Configuraciones de la especialidad
+  defaultDuration       Int         @default(30) // minutos
+  requiresReferral      Boolean     @default(false)
+  
+  // Timestamps
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+  
+  // Relaciones
+  medicalProfessionals  MedicalProfessional[]
+  appointments          Appointment[]
+  
+  // Índices para performance
+  @@index([code])
+  @@index([isActive])
+  @@index([name])
+  @@map("specialties")
+}
+
+model Appointment {
+  id                    String            @id @default(cuid())
+  
+  // Información básica
+  patientId             String
+  medicalProfessionalId String
+  specialtyId           String?
+  
+  // Detalles de la cita
+  scheduledDate         DateTime
+  scheduledTime         DateTime
+  duration              Int               @default(30) // minutos
+  type                  AppointmentType
+  status                AppointmentStatus @default(SCHEDULED)
+  
+  // Información adicional
+  reason                String
+  notes                 String?
+  consultingRoom        String?
+  
+  // Información de cancelación/reprogramación
+  cancelledAt           DateTime?
+  cancelReason          String?
+  rescheduledFrom       String?           // ID de cita anterior
+  
+  // Información de creación
+  createdById           String
+  
+  // Timestamps
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  
+  // Relaciones
+  patient               Patient           @relation(fields: [patientId], references: [id])
+  medicalProfessional   MedicalProfessional @relation(fields: [medicalProfessionalId], references: [id])
+  specialty             Specialty?        @relation(fields: [specialtyId], references: [id])
+  createdBy             User              @relation("CreatedByUser", fields: [createdById], references: [id])
+  medicalRecords        MedicalRecord[]
+  
+  // Índices para performance
+  @@index([scheduledDate])
+  @@index([patientId, scheduledDate])
+  @@index([medicalProfessionalId, scheduledDate])
+  @@index([status])
+  @@index([type])
+  @@index([createdById])
+  @@map("appointments")
+}
+
+model MedicalRecord {
+  id                    String      @id @default(cuid())
+  
+  // Información básica
+  patientId             String
+  medicalProfessionalId String
+  appointmentId         String?
+  
+  // Tipo y contenido
+  type                  RecordType
+  title                 String
+  content               String      // Contenido principal del registro
+  
+  // Información clínica
+  symptoms              String?     // JSON array de síntomas
+  diagnosis             String?     // JSON array de diagnósticos (CIE-10)
+  treatment             String?     // JSON array de tratamientos
+  prescriptions         String?     // JSON array de prescripciones
+  
+  // Signos vitales
+  vitalSigns            String?     // JSON con signos vitales
+  
+  // Información adicional
+  observations          String?
+  recommendations       String?
+  followUpDate          DateTime?
+  
+  // Información de confidencialidad
+  isConfidential        Boolean     @default(false)
+  accessLevel           String      @default("STANDARD") // STANDARD, RESTRICTED, CONFIDENTIAL
+  
+  // Timestamps
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+  
+  // Relaciones
+  patient               Patient     @relation(fields: [patientId], references: [id])
+  medicalProfessional   MedicalProfessional @relation(fields: [medicalProfessionalId], references: [id])
+  appointment           Appointment? @relation(fields: [appointmentId], references: [id])
+  documents             Document[]
+  
+  // Índices para performance
+  @@index([patientId, createdAt])
+  @@index([medicalProfessionalId, createdAt])
+  @@index([type])
+  @@index([appointmentId])
+  @@map("medical_records")
+}
+
+model Document {
+  id                    String          @id @default(cuid())
+  
+  // Información básica
+  patientId             String
+  medicalRecordId       String?
+  
+  // Detalles del documento
+  category              DocumentCategory
+  title                 String
+  description           String?
+  fileName              String
+  fileSize              Int
+  mimeType              String
+  fileUrl               String          // URL en Vercel Blob
+  
+  // Información de seguridad
+  isEncrypted           Boolean         @default(false)
+  encryptionKey         String?         // Clave de encriptación si aplica
+  accessLevel           String          @default("STANDARD")
+  
+  // Metadatos
+  uploadedById          String?
+  tags                  String?         // JSON array de tags
+  
+  // Timestamps
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+  
+  // Relaciones
+  patient               Patient         @relation(fields: [patientId], references: [id])
+  medicalRecord         MedicalRecord?  @relation(fields: [medicalRecordId], references: [id])
+  
+  // Índices para performance
+  @@index([patientId])
+  @@index([category])
+  @@index([medicalRecordId])
+  @@index([createdAt])
+  @@map("documents")
+}
+
+model AuditLog {
+  id                    String      @id @default(cuid())
+  
+  // Información del usuario
+  userId                String?
+  userEmail             String?
+  userRole              String?
+  
+  // Información de la acción
+  action                AuditAction
+  resource              String      // Tabla/recurso afectado
+  resourceId            String?     // ID del recurso afectado
+  
+  // Detalles de la acción
+  description           String
+  oldValues             String?     // JSON con valores anteriores
+  newValues             String?     // JSON con valores nuevos
+  
+  // Información de la sesión
+  ipAddress             String
+  userAgent             String?
+  sessionId             String?
+  
+  // Información de cumplimiento normativo
+  complianceNote        String?     // Nota de cumplimiento normativo
+  retentionDate         DateTime    // Fecha hasta la cual debe conservarse (7 años)
+  
+  // Timestamps
+  createdAt             DateTime    @default(now())
+  
+  // Relaciones
+  user                  User?       @relation(fields: [userId], references: [id])
+  
+  // Índices para performance
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([resource])
+  @@index([createdAt])
+  @@index([retentionDate])
+  @@map("audit_logs")
+}
+
+model SystemConfiguration {
+  id                    String      @id @default(cuid())
+  key                   String      @unique
+  value                 String
+  description           String?
+  category              String      @default("GENERAL")
+  isActive              Boolean     @default(true)
+  
+  // Timestamps
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+  
+  // Índices para performance
+  @@index([key])
+  @@index([category])
+  @@index([isActive])
+  @@map("system_configurations")
+}
