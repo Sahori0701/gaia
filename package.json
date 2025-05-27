@@ -1,0 +1,16 @@
+{
+  "name": "gaia",
+  "version": "1.0.0",
+  "description": "Sistema de Gestión de Salud EPS - Colombia",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "cd backend && npm run build && cd ../frontend && npm run build",
+    "start": "cd backend && npm start",
+    "deploy": "vercel --prod"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
