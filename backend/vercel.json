@@ -1,6 +1,5 @@
 {
   "version": 2,
-  "name": "gaia-backend",
   "builds": [
     {
       "src": "server.js",
@@ -12,13 +11,5 @@
       "src": "/(.*)",
       "dest": "/server.js"
     }
-  ],
-  "env": {
-    "NODE_ENV": "production"
-  },
-  "functions": {
-    "server.js": {
-      "maxDuration": 30
-    }
-  }
+  ]
 }
