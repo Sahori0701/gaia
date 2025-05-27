@@ -1,72 +1,36 @@
 const express = require("express")
 const cors = require("cors")
-const helmet = require("helmet")
-const morgan = require("morgan")
-const rateLimit = require("express-rate-limit")
-const compression = require("compression")
+const path = require("path")
 
-// Cargar variables de entorno ANTES que todo
+// Cargar variables de entorno
 require("dotenv").config()
-
-// Importar configuraciones
-const { logger } = require("./config/logger")
-const { auditMiddleware } = require("./middleware/auth.middleware")
 
 // Crear aplicación Express
 const app = express()
 
-// Configuración del puerto para Vercel
+// Configuración básica
 const PORT = process.env.PORT || 3000
 const NODE_ENV = process.env.NODE_ENV || "production"
 
-// ===== MIDDLEWARES DE SEGURIDAD =====
+// ===== MIDDLEWARES BÁSICOS =====
 
-// Helmet para seguridad HTTP (configuración más permisiva para Vercel)
-app.use(
-  helmet({
-    contentSecurityPolicy: false, // Deshabilitado para evitar problemas en Vercel
-    crossOriginEmbedderPolicy: false,
-  }),
-)
-
-// CORS configurado para producción
+// CORS permisivo para desarrollo
 app.use(
   cors({
-    origin: true, // Permitir todos los orígenes en desarrollo
+    origin: true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   }),
 )
 
-// Rate limiting más permisivo para desarrollo
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 1000, // límite alto para desarrollo
-  message: {
-    error: "Demasiadas solicitudes desde esta IP, intente nuevamente en 15 minutos.",
-    code: "RATE_LIMIT_EXCEEDED",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-})
-app.use("/api/", limiter)
-
-// Compresión
-app.use(compression())
-
 // Parsing de JSON
 app.use(express.json({ limit: "10mb" }))
 app.use(express.urlencoded({ extended: true, limit: "10mb" }))
 
-// Logging básico
-if (NODE_ENV === "development") {
-  app.use(morgan("combined"))
-}
+// ===== RUTAS BÁSICAS =====
 
-// ===== RUTAS BÁSICAS PRIMERO =====
-
-// Ruta de salud del servidor (sin dependencias)
+// Ruta principal
 app.get("/", (req, res) => {
   res.json({
     message: "🏥 Gaia EPS API - Sistema de Gestión de Salud",
@@ -74,136 +38,117 @@ app.get("/", (req, res) => {
     version: "1.0.0",
     timestamp: new Date().toISOString(),
     environment: NODE_ENV,
+    endpoints: {
+      health: "/health",
+      info: "/api/info",
+      test: "/api/test/basic",
+    },
   })
 })
 
+// Health check
 app.get("/health", (req, res) => {
-  const healthCheck = {
+  res.json({
     status: "OK",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     environment: NODE_ENV,
     version: "1.0.0",
     timezone: "America/Bogota",
-    country: "Colombia",
-  }
-
-  res.status(200).json(healthCheck)
+  })
 })
 
-// Ruta de información básica
+// Información del sistema
 app.get("/api/info", (req, res) => {
-  const systemInfo = {
+  res.json({
     name: "Gaia - Sistema de Gestión de Salud EPS",
     version: "1.0.0",
     description: "API para gestión integral de salud en Colombia",
     status: "running",
     timestamp: new Date().toISOString(),
-    endpoints: {
-      health: "/health",
-      info: "/api/info",
-      auth: "/api/auth",
-    },
-  }
-
-  res.status(200).json(systemInfo)
-})
-
-// ===== IMPORTAR RUTAS CON MANEJO DE ERRORES =====
-
-try {
-  // Importar rutas solo si las dependencias están disponibles
-  const authRoutes = require("./routes/auth.routes")
-  app.use("/api/auth", authRoutes)
-
-  console.log("✅ Auth routes loaded")
-} catch (error) {
-  console.error("❌ Error loading auth routes:", error.message)
-}
-
-try {
-  const patientRoutes = require("./routes/patient.routes")
-  app.use("/api/patients", patientRoutes)
-
-  console.log("✅ Patient routes loaded")
-} catch (error) {
-  console.error("❌ Error loading patient routes:", error.message)
-}
-
-try {
-  const appointmentRoutes = require("./routes/appointment.routes")
-  app.use("/api/appointments", appointmentRoutes)
-
-  console.log("✅ Appointment routes loaded")
-} catch (error) {
-  console.error("❌ Error loading appointment routes:", error.message)
-}
-
-try {
-  const medicalRecordRoutes = require("./routes/medical-record.routes")
-  app.use("/api/medical-records", medicalRecordRoutes)
-
-  console.log("✅ Medical record routes loaded")
-} catch (error) {
-  console.error("❌ Error loading medical record routes:", error.message)
-}
-
-// ===== RUTAS DE PRUEBA =====
-
-app.get("/api/test/basic", (req, res) => {
-  res.json({
-    message: "✅ API básica funcionando",
-    timestamp: new Date().toISOString(),
-    environment: NODE_ENV,
+    features: ["Autenticación JWT", "Gestión de pacientes", "Sistema de citas", "Historia clínica digital"],
   })
 })
 
+// Test básico
+app.get("/api/test/basic", (req, res) => {
+  res.json({
+    message: "✅ API básica funcionando correctamente",
+    timestamp: new Date().toISOString(),
+    environment: NODE_ENV,
+    database: process.env.DATABASE_URL ? "Configurada" : "No configurada",
+    jwt: process.env.JWT_SECRET ? "Configurado" : "No configurado",
+  })
+})
+
+// ===== CARGAR RUTAS AVANZADAS (CON MANEJO DE ERRORES) =====
+
+try {
+  // Solo cargar rutas complejas si las dependencias están disponibles
+  console.log("Intentando cargar rutas avanzadas...")
+
+  // Verificar que Prisma esté disponible
+  const { prisma } = require("./config/database")
+
+  // Si llegamos aquí, Prisma está disponible
+  const authRoutes = require("./routes/auth.routes")
+  app.use("/api/auth", authRoutes)
+  console.log("✅ Auth routes cargadas")
+
+  const patientRoutes = require("./routes/patient.routes")
+  app.use("/api/patients", patientRoutes)
+  console.log("✅ Patient routes cargadas")
+
+  const appointmentRoutes = require("./routes/appointment.routes")
+  app.use("/api/appointments", appointmentRoutes)
+  console.log("✅ Appointment routes cargadas")
+
+  const medicalRecordRoutes = require("./routes/medical-record.routes")
+  app.use("/api/medical-records", medicalRecordRoutes)
+  console.log("✅ Medical record routes cargadas")
+} catch (error) {
+  console.warn("⚠️ No se pudieron cargar todas las rutas avanzadas:", error.message)
+  console.log("🔄 API funcionando en modo básico")
+
+  // Ruta de fallback para auth
+  app.get("/api/auth/test", (req, res) => {
+    res.json({
+      message: "Auth routes no disponibles",
+      error: "Dependencias no cargadas",
+      suggestion: "Verificar variables de entorno y base de datos",
+    })
+  })
+}
+
 // ===== MANEJO DE ERRORES =====
 
-// Middleware para rutas no encontradas
+// 404 para rutas no encontradas
 app.use("*", (req, res) => {
   res.status(404).json({
     error: "Ruta no encontrada",
-    message: `La ruta ${req.originalUrl} no existe en la API de Gaia`,
-    code: "ROUTE_NOT_FOUND",
+    message: `La ruta ${req.originalUrl} no existe`,
     availableRoutes: ["/", "/health", "/api/info", "/api/test/basic"],
   })
 })
 
-// Middleware global de manejo de errores
+// Error handler global
 app.use((error, req, res, next) => {
-  console.error("Error no manejado:", error.message)
-  console.error("Stack:", error.stack)
+  console.error("Error:", error.message)
 
-  const errorResponse = {
+  res.status(500).json({
     error: "Error interno del servidor",
-    message: NODE_ENV === "development" ? error.message : "Ha ocurrido un error inesperado",
-    code: "INTERNAL_SERVER_ERROR",
+    message: NODE_ENV === "development" ? error.message : "Error inesperado",
     timestamp: new Date().toISOString(),
-  }
-
-  res.status(500).json(errorResponse)
+  })
 })
 
 // ===== EXPORTAR PARA VERCEL =====
-
-// Para Vercel, exportamos la app directamente
 module.exports = app
 
 // Para desarrollo local
 if (require.main === module) {
-  const server = app.listen(PORT, () => {
+  app.listen(PORT, () => {
     console.log(`🏥 Servidor Gaia iniciado en puerto ${PORT}`)
     console.log(`🌍 Entorno: ${NODE_ENV}`)
-    console.log(`📍 URL: http://localhost:${PORT}`)
-  })
-
-  // Manejo de cierre graceful
-  process.on("SIGTERM", () => {
-    console.log("SIGTERM recibido, cerrando servidor")
-    server.close(() => {
-      console.log("Servidor cerrado")
-      process.exit(0)
-    })
   })
 }
