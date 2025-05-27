@@ -1,0 +1,10 @@
+# Backend específico
+node_modules/
+.env
+.env.*
+logs/
+uploads/
+temp/
+*.log
+prisma/migrations/
+.prisma/
